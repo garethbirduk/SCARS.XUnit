@@ -1,6 +1,5 @@
 name: SCARS.XUnit
 
-
 on:
   push:
     branches:
@@ -30,6 +29,14 @@ jobs:
 
     - name: Print .NET SDK version
       run: dotnet --version
+
+    - name: Check if GH_APIKEY exists
+      run: |
+        if [ -z "${{ secrets.GH_APIKEY }}" ]; then
+          echo "GH_APIKEY secret is not set!"
+        else
+          echo "GH_APIKEY secret is set."
+        fi
 
     - name: NuGet set access
       run: dotnet nuget add source --username ${{ github.actor }} --password ${{ github.token }} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/garethbirduk/index.json"

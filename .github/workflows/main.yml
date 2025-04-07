@@ -38,6 +38,9 @@ jobs:
 
     - name: Print .NET SDK version
       run: dotnet --version
+      
+    - name: NuGet set access
+      run: dotnet nuget add source --username ${{ github.actor }} --password ${{ github.token }} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/garethbirduk/index.json"
 
     - name: Install dependencies
       run: dotnet restore

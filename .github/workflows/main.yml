@@ -1,26 +1,19 @@
-name: SCARS.Core CI/CD
+name: SCARS.XUnit
+
 
 on:
   push:
     branches:
       - main
-      - 'feature/*'
-      - 'bugfix/*'
-      - 'major/*'
-  pull_request:
-    branches:
-      - main
-      - 'feature/*'
-      - 'bugfix/*'
-      - 'major/*'
+      - "*"
 
 permissions:
   contents: read
-  packages: write
+  pages: write
   id-token: write
 
 concurrency:
-  group: "versioning"
+  group: "pages"
   cancel-in-progress: false
 
 jobs:
@@ -28,8 +21,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
 
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
@@ -38,39 +30,96 @@ jobs:
 
     - name: Print .NET SDK version
       run: dotnet --version
-      
+
     - name: NuGet set access
       run: dotnet nuget add source --username ${{ github.actor }} --password ${{ github.token }} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/garethbirduk/index.json"
 
-    - name: Install dependencies
+    - name: Restore dependencies
       run: dotnet restore
 
-    - name: Install Yarn (if needed)
+    - name: Build
+      run: dotnet build --no-restore --configuration Release
+
+    - name: Install modules
       run: yarn --prefer-offline
 
-    - name: Determine new version and update .csproj
+#    - name: Test and generate coverage report
+#      run: |
+#        dotnet test --configuration Release --no-build SCARS.XUnit.Test/SCARS.XUnit.Test.csproj /p:CollectCoverage=true /p:CoverletOutputFormat="opencover" --verbosity normal
+#        dotnet tool install -g dotnet-reportgenerator-globaltool
+#        reportgenerator "-reports:SCARS.XUnit.Test/coverage.opencover.xml" "-targetdir:./coverage/" "-reporttypes:Badges;Html;TextSummary"
+#
+#    - name: Upload artifact
+#      uses: actions/upload-artifact@latest  # Correct action version
+#
+#    - name: Deploy to GitHub Pages
+#      id: deployment
+#      if: github.ref == 'refs/heads/main'
+#      uses: actions/deploy-pages@v1
+#            
+#    - name: Create Test Coverage Badge
+#      uses: simon-k/dotnet-code-coverage-badge@v1.0.0
+#      id: create_coverage_badge
+#      if: github.ref == 'refs/heads/main'
+#      with:
+#        label: Unit Test Coverage
+#        color: brightgreen
+#        path: ./SCARS.XUnit.Test/coverage.opencover.xml
+#        gist-filename: code-coverage.json
+#        gist-id: ${{ secrets.GIST_ID }}
+#        gist-auth-token: ${{ secrets.GIST_AUTH_TOKEN }}       
+#
+#    - name: Print badge data
+#      if: github.ref == 'refs/heads/main'    
+#      run: echo "Badge data ${{steps.test_step.outputs.badge}}"
+
+    - name: Get Version from .csproj
+      id: get_version
+      run: |
+        # Extract the version number from the .csproj file
+        version=$(grep -oP '(?<=<Version>)(.*?)(?=</Version>)' SCARS.XUnit/SCARS.XUnit.csproj)
+        echo "Version from .csproj is $version"
+        echo "::set-output name=version::$version"
+
+    - name: Set Version Based on Branch
       id: set_version
       run: |
-        # Call the CSX script to determine the new version and update .csproj
-        dotnet script ./scripts/set-version.csx $GITHUB_REF  # Pass in the branch reference
+        branch_name=$(echo $GITHUB_REF | sed 's/refs\/heads\///')
 
-    - name: Build project
-      run: dotnet build --no-restore --configuration Release
+        # Extract the version number, type, and description from the branch name
+        branch_version=$(echo $branch_name | sed 's/^_//' | sed 's/[^a-zA-Z0-9]/-/g')
+
+        # If the branch is "main", use the version from the .csproj, else append the branch version
+        if [[ "$branch_name" == "main" ]]; then
+          version=${{ steps.get_version.outputs.version }}
+        else
+          version=${{ steps.get_version.outputs.version }}-$branch_version
+        fi
+        
+        echo "Version set to $version"
+        echo "::set-output name=version::$version"
+
+    - name: Update Version in .csproj
+      run: |
+        # Update the version in the .csproj file based on the branch version
+        sed -i 's/<Version>.*<\/Version>/<Version>${{ steps.set_version.outputs.version }}<\/Version>/' SCARS.XUnit/SCARS.XUnit.csproj
+        echo "Updated .csproj version to ${{ steps.set_version.outputs.version }}"
 
     - name: Pack NuGet Package
       run: |
-        dotnet pack ./SCARS.Core/SCARS.Core.csproj --configuration Release --output ./nupkgs
-      env:
-        VERSION: ${{ steps.set_version.outputs.version }}
+        # Pack the NuGet package with the updated version
+        dotnet pack ./SCARS.XUnit/SCARS.XUnit.csproj --configuration Release --output ./nupkgs
 
-    - name: Deploy NuGet Package
+    - name: Check if GH_APIKEY exists
       run: |
-        # Push to GitHub Packages
-        dotnet nuget push ./nupkgs/*.nupkg --source "github" --api-key ${{ secrets.GH_APIKEY }} --skip-duplicate
-      if: github.ref == 'refs/heads/main'  # Only push if it's on the main branch
-          
-    - name: Deploy Pre-release NuGet Package
-      run: |
-        # Push pre-release version to GitHub Packages
-        dotnet nuget push ./nupkgs/*.nupkg --source "github" --api-key ${{ secrets.GH_APIKEY }} --skip-duplicate --prerelease
-      if: github.ref != 'refs/heads/main'  # Only push if it's on any other branch
+        if [ -z "${{ secrets.GH_APIKEY }}" ]; then
+          echo "GH_APIKEY secret is not set!"
+        else
+          echo "GH_APIKEY secret is set."
+        fi
+
+    - name: NuGet set access
+      run: dotnet nuget add source --username ${{ github.actor }} --password ${{ github.token }} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/garethbirduk/index.json"
+
+    - name: NuGet deploy Package
+      run: dotnet nuget push ./nupkgs/*.nupkg --source "github" --api-key ${{ secrets.GH_APIKEY }} --skip-duplicate
